@@ -3,108 +3,129 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Pantry Inventory</title>
+  <title>Shared Pantry</title>
   <style>
-    body {
-      font: 16px system-ui, sans-serif;
-      max-width: 700px;
-      margin: 2rem auto;
-      padding: 0 1rem;
-      color: #222;
-    }
-    input, button {
-      font: inherit;
-      padding: .65rem;
-      margin: .25rem 0;
-    }
-    input { max-width: 100%; }
+    body { font: 16px system-ui, sans-serif; max-width: 700px; margin: 2rem auto; padding: 0 1rem; color: #222; }
+    input, button { font: inherit; padding: .65rem; margin: .25rem 0; }
     button { cursor: pointer; }
     form { display: flex; flex-wrap: wrap; gap: .4rem; }
+    input { min-width: 120px; }
     #scanner { width: 100%; max-height: 300px; background: #111; }
-    li { margin: .6rem 0; }
+    li { margin: .7rem 0; }
     .muted { color: #555; }
+    [hidden] { display: none !important; }
   </style>
 </head>
 <body>
-  <h1>Pantry Inventory</h1>
+  <h1>Shared Pantry</h1>
 
-  <p>
-    Scan a known item to deduct one. To add a new product, scan its barcode
-    and enter its name and quantity.
-  </p>
+  <section id="loginPanel">
+    <p>Sign in with the email and password for the account you created.</p>
+    <form id="loginForm">
+      <input id="email" type="email" placeholder="Email" autocomplete="username" required>
+      <input id="password" type="password" placeholder="Password" autocomplete="current-password" required>
+      <button type="submit">Sign in</button>
+    </form>
+  </section>
 
-  <button id="startScan">Start camera scanner</button>
-  <button id="stopScan" disabled>Stop scanner</button>
-  <video id="scanner" playsinline hidden></video>
-  <p id="status" class="muted">Scanner stopped.</p>
+  <main id="appPanel" hidden>
+    <button id="signOutButton">Sign out</button>
+    <button id="refreshButton">Refresh inventory</button>
+    <button id="importButton">Import this phone’s old inventory</button>
 
-  <form id="barcodeForm">
-    <input id="barcodeInput" placeholder="Barcode" inputmode="numeric" required>
-    <button type="submit">Use scanned/typed barcode</button>
-  </form>
+    <p id="status" class="muted">Ready.</p>
 
-  <h2>Add or restock an item</h2>
-  <form id="itemForm">
-    <input id="nameInput" placeholder="Item name" required>
-    <input id="newBarcodeInput" placeholder="Barcode" required>
-    <input id="quantityInput" type="number" min="1" value="1" required>
-    <button type="submit">Add quantity</button>
-  </form>
+    <button id="startScan">Start camera scanner</button>
+    <button id="stopScan" disabled>Stop scanner</button>
+    <video id="scanner" playsinline hidden></video>
 
-  <h2>Your food storage</h2>
-  <ul id="inventory"></ul>
-  <button id="clearButton">Clear all inventory</button>
+    <form id="barcodeForm">
+      <input id="barcodeInput" placeholder="Barcode" inputmode="numeric" required>
+      <button type="submit">Use barcode</button>
+    </form>
 
+    <h2>Add or restock an item</h2>
+    <form id="itemForm">
+      <input id="nameInput" placeholder="Item name" required>
+      <input id="newBarcodeInput" placeholder="Barcode" required>
+      <input id="quantityInput" type="number" min="1" value="1" required>
+      <button type="submit">Add quantity</button>
+    </form>
+
+    <h2>Food storage</h2>
+    <ul id="inventory"></ul>
+  </main>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script>
-    const STORAGE_KEY = "pantry-inventory-v1";
-    let inventory = JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
+    const SUPABASE_URL = "https://fbizspjnzpwzemwkbcxb.supabase.co";
+    const SUPABASE_KEY = "sb_publishable_GoLYKSn9jlP22Nvq_v4cJQ_7Jl6Pw0U";
+    const db = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+    let inventory = [];
     let stream = null;
     let detector = null;
     let scanLock = false;
 
-    const video = document.querySelector("#scanner");
     const status = document.querySelector("#status");
+    const video = document.querySelector("#scanner");
 
-    function save() {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(inventory));
+    function setStatus(message) {
+      status.textContent = message;
+    }
+
+    function showSignedIn(signedIn) {
+      document.querySelector("#loginPanel").hidden = signedIn;
+      document.querySelector("#appPanel").hidden = !signedIn;
+    }
+
+    async function loadInventory() {
+      const { data, error } = await db
+        .from("pantry_items")
+        .select("barcode, name, quantity")
+        .order("name");
+
+      if (error) {
+        setStatus("Could not load inventory: " + error.message);
+        return;
+      }
+
+      inventory = data || [];
       render();
+      setStatus("Inventory synced.");
     }
 
     function render() {
       const list = document.querySelector("#inventory");
       list.replaceChildren();
 
-      const items = Object.entries(inventory);
-      if (items.length === 0) {
+      if (!inventory.length) {
         const empty = document.createElement("li");
         empty.textContent = "No items yet.";
         list.append(empty);
         return;
       }
 
-      for (const [barcode, item] of items) {
+      for (const item of inventory) {
         const row = document.createElement("li");
         const label = document.createElement("span");
-        label.textContent = `${item.name} — ${item.quantity} (barcode ${barcode}) `;
+        label.textContent = `${item.name} — ${item.quantity} (barcode ${item.barcode}) `;
 
         const useButton = document.createElement("button");
         useButton.textContent = "Use one";
-        useButton.onclick = () => useItem(barcode);
+        useButton.onclick = () => useItem(item.barcode);
 
         const addButton = document.createElement("button");
         addButton.textContent = "Add one";
-        addButton.onclick = () => {
-          item.quantity++;
-          save();
-        };
+        addButton.onclick = () => changeQuantity(item.barcode, 1);
 
         const deleteButton = document.createElement("button");
         deleteButton.textContent = "Delete";
-        deleteButton.onclick = () => {
-          if (confirm(`Delete ${item.name} from your inventory?`)) {
-            delete inventory[barcode];
-            save();
-          }
+        deleteButton.onclick = async () => {
+          if (!confirm(`Delete ${item.name} from the shared pantry?`)) return;
+          const { error } = await db.from("pantry_items").delete().eq("barcode", item.barcode);
+          if (error) setStatus("Delete failed: " + error.message);
+          else await loadInventory();
         };
 
         row.append(label, useButton, addButton, deleteButton);
@@ -112,53 +133,112 @@
       }
     }
 
-    function useItem(barcode) {
-      const item = inventory[barcode];
-      if (!item) {
-        alert("That barcode isn't in your inventory yet. Add the item below first.");
+    async function changeQuantity(barcode, amount) {
+      const item = inventory.find(x => x.barcode === barcode);
+      if (!item) return;
+
+      const quantity = item.quantity + amount;
+      if (quantity < 0) {
+        setStatus(`${item.name} is already at zero.`);
         return;
       }
-      if (item.quantity <= 0) {
-        alert(`${item.name} is already at zero.`);
-        return;
-      }
-      item.quantity--;
-      save();
-      status.textContent = `Used one ${item.name}. ${item.quantity} left.`;
+
+      const { error } = await db
+        .from("pantry_items")
+        .update({ quantity, updated_at: new Date().toISOString() })
+        .eq("barcode", barcode);
+
+      if (error) setStatus("Update failed: " + error.message);
+      else await loadInventory();
     }
 
-    document.querySelector("#itemForm").addEventListener("submit", event => {
+    async function useItem(barcode) {
+      const item = inventory.find(x => x.barcode === barcode);
+      if (!item) {
+        setStatus("That barcode isn't in the pantry yet. Add the item below first.");
+        return;
+      }
+      await changeQuantity(barcode, -1);
+    }
+
+    document.querySelector("#loginForm").addEventListener("submit", async event => {
       event.preventDefault();
+      const email = document.querySelector("#email").value.trim();
+      const password = document.querySelector("#password").value;
+
+      const { error } = await db.auth.signInWithPassword({ email, password });
+      if (error) setStatus("Sign-in failed: " + error.message);
+    });
+
+    document.querySelector("#signOutButton").onclick = async () => {
+      stopScanner();
+      await db.auth.signOut();
+      showSignedIn(false);
+    };
+
+    document.querySelector("#refreshButton").onclick = loadInventory;
+
+    document.querySelector("#itemForm").addEventListener("submit", async event => {
+      event.preventDefault();
+
       const name = document.querySelector("#nameInput").value.trim();
       const barcode = document.querySelector("#newBarcodeInput").value.trim();
       const quantity = Number(document.querySelector("#quantityInput").value);
-
       if (!name || !barcode || !Number.isInteger(quantity) || quantity < 1) return;
 
-      if (inventory[barcode]) {
-        inventory[barcode].quantity += quantity;
-        inventory[barcode].name = name;
-      } else {
-        inventory[barcode] = { name, quantity };
+      const existing = inventory.find(x => x.barcode === barcode);
+      const item = {
+        barcode,
+        name,
+        quantity: quantity + (existing ? existing.quantity : 0),
+        updated_at: new Date().toISOString()
+      };
+
+      const { error } = await db.from("pantry_items").upsert(item, { onConflict: "barcode" });
+      if (error) {
+        setStatus("Could not save item: " + error.message);
+        return;
       }
 
-      save();
       event.target.reset();
       document.querySelector("#quantityInput").value = 1;
-      status.textContent = `Added ${quantity} × ${name}.`;
+      setStatus(`Saved ${name}.`);
+      await loadInventory();
     });
 
-    document.querySelector("#barcodeForm").addEventListener("submit", event => {
+    document.querySelector("#barcodeForm").addEventListener("submit", async event => {
       event.preventDefault();
       const barcode = document.querySelector("#barcodeInput").value.trim();
-      if (barcode) useItem(barcode);
+      if (barcode) await useItem(barcode);
       document.querySelector("#barcodeInput").value = "";
     });
 
+    document.querySelector("#importButton").onclick = async () => {
+      const oldInventory = JSON.parse(localStorage.getItem("pantry-inventory-v1") || "{}");
+      const rows = Object.entries(oldInventory).map(([barcode, item]) => ({
+        barcode,
+        name: item.name,
+        quantity: Number(item.quantity) || 0
+      })).filter(item => item.name && item.quantity >= 0);
+
+      if (!rows.length) {
+        setStatus("No old inventory was found in this browser.");
+        return;
+      }
+
+      if (!confirm(`Import ${rows.length} item types into the shared pantry? Existing matching barcodes will be replaced.`)) return;
+
+      const { error } = await db.from("pantry_items").upsert(rows, { onConflict: "barcode" });
+      if (error) setStatus("Import failed: " + error.message);
+      else {
+        setStatus(`Imported ${rows.length} item types.`);
+        await loadInventory();
+      }
+    };
+
     document.querySelector("#startScan").onclick = async () => {
       if (!("BarcodeDetector" in window)) {
-        status.textContent =
-          "This browser doesn't support camera barcode scanning. Type the barcode below instead.";
+        setStatus("Camera barcode scanning isn't supported in this browser. Type the barcode instead.");
         return;
       }
 
@@ -175,33 +255,27 @@
 
         document.querySelector("#startScan").disabled = true;
         document.querySelector("#stopScan").disabled = false;
-        status.textContent = "Point the camera at a barcode.";
-
-        scanLock = false;
+        setStatus("Point the camera at a barcode.");
         scanFrame();
       } catch (error) {
-        status.textContent = `Couldn't start the camera: ${error.message}`;
+        setStatus("Couldn't start camera: " + error.message);
       }
     };
 
     async function scanFrame() {
       if (!stream) return;
-
       try {
         const codes = await detector.detect(video);
         if (codes.length && !scanLock) {
           scanLock = true;
           const barcode = codes[0].rawValue;
           document.querySelector("#barcodeInput").value = barcode;
-          useItem(barcode);
-
-          // Pause briefly so the same barcode isn't deducted repeatedly.
+          await useItem(barcode);
           setTimeout(() => { scanLock = false; }, 1800);
         }
       } catch (error) {
-        status.textContent = "Couldn't read that barcode. Try adjusting the camera.";
+        setStatus("Couldn't read the barcode. Try adjusting the camera.");
       }
-
       if (stream) requestAnimationFrame(scanFrame);
     }
 
@@ -214,17 +288,25 @@
       video.hidden = true;
       document.querySelector("#startScan").disabled = false;
       document.querySelector("#stopScan").disabled = true;
-      status.textContent = "Scanner stopped.";
     }
 
-    document.querySelector("#clearButton").onclick = () => {
-      if (confirm("Delete all pantry inventory saved in this browser?")) {
-        inventory = {};
-        save();
-      }
-    };
+    db.auth.onAuthStateChange((_event, session) => {
+      const signedIn = Boolean(session);
+      showSignedIn(signedIn);
+      if (signedIn) loadInventory();
+      else stopScanner();
+    });
 
-    render();
+    db.auth.getSession().then(({ data }) => {
+      const signedIn = Boolean(data.session);
+      showSignedIn(signedIn);
+      if (signedIn) loadInventory();
+    });
+
+    // Check for updates made from another phone.
+    setInterval(() => {
+      if (!document.querySelector("#appPanel").hidden) loadInventory();
+    }, 10000);
   </script>
 </body>
 </html>
